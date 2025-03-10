@@ -6,3 +6,4 @@ social-auth-app-django
 argon2-cffi
 Werkzeug
 pyOpenSSL
+social-auth-app-django

@@ -1,4 +1,5 @@
 import logging
+from django.contrib.auth import logout
 from django.contrib.auth import login
 from django.shortcuts import redirect
 from social_django.utils import load_strategy
@@ -263,3 +264,10 @@ class GoogleLoginView(APIView):
                 return Response({"error": "Authentication failed"}, status=400)
         except AuthException:
             return Response({"error": "Invalid token"}, status=400)
+
+class GoogleLogoutView(APIView):
+    def get(self, request):
+        logout(request)
+        return Response({"message": "Logged out successfully"}) 
+
+
