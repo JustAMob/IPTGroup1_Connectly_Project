@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set VIRTUAL_ENV=C:\Users\Ck\OneDrive\Desktop\Project Folders\connectly_project_group_1\env
+set VIRTUAL_ENV=C:\Projects\connectly_project_group_1\env
 
 if not defined PROMPT set PROMPT=$P$G
 

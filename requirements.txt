@@ -1,0 +1,8 @@
+Django==5.1.7
+django-extensions
+djangorestframework
+djangorestframework-simplejwt
+social-auth-app-django
+argon2-cffi
+Werkzeug
+pyOpenSSL

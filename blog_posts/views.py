@@ -1,12 +1,21 @@
 import logging
+from django.contrib.auth import login
+from django.shortcuts import redirect
+from social_django.utils import load_strategy
+from social_core.backends.google import GoogleOAuth2
+from social_core.exceptions import AuthException
 from django.shortcuts import get_object_or_404
+from django.core.cache import cache
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.pagination import PageNumberPagination
+from rest_framework.generics import ListAPIView
 from .models import User, Post, Comment, Like
+from .models import Follow
 from .serializers import (
     UserSerializer, 
     UserRegisterSerializer, 
@@ -167,3 +176,90 @@ class UpdateUserView(BaseAuthenticatedAPIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# Custom Pagination Class
+class PostPagination(PageNumberPagination):
+    page_size = 10  # Number of posts per page
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+# News Feed View
+class NewsFeedView(ListAPIView):
+    serializer_class = PostSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = PostPagination  # Ensure PostPagination is defined
+
+    def get_queryset(self):
+        user = self.request.user
+        cache_key = f'user_feed_{user.id}'
+        cached_posts = cache.get(cache_key)
+        
+        if not cached_posts:
+            # Get the list of users that the current user is following
+            followed_users = Follow.objects.filter(user=user).values_list('followed_user', flat=True)
+            logger.info(f"Followed users: {followed_users}")
+
+            # Fetch posts where the author is one of the followed users
+            posts = Post.objects.filter(author__in=followed_users) \
+                .select_related('author') \
+                .prefetch_related('comments') \
+                .order_by('-created_at')
+
+            # Cache the posts for 15 minutes
+            cache.set(cache_key, posts, timeout=900)  # Cache for 15 minutes
+            return posts
+        
+        return cached_posts
+
+def invalidate_user_feed_cache(user):
+    """Function to invalidate the user's feed cache when a follow/unfollow action occurs."""
+    cache.delete(f'user_feed_{user.id}')
+    logger.info(f"Cache invalidated for user {user.id}.")
+
+class FollowUserView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # Get the user to follow and the current authenticated user
+        followed_user_id = request.data.get('followed_user_id')
+        
+        # Ensure the user to follow exists
+        try:
+            followed_user = User.objects.get(id=followed_user_id)
+        except User.DoesNotExist:
+            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Make sure a user can't follow themselves
+        if followed_user == request.user:
+            return Response({'error': 'You cannot follow yourself.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if the user is already following the followed_user
+        if Follow.objects.filter(user=request.user, followed_user=followed_user).exists():
+            return Response({'error': 'You are already following this user.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create the follow relationship
+        Follow.objects.create(user=request.user, followed_user=followed_user)
+        
+        # Invalidate the cache for both users involved in the follow relationship
+        invalidate_user_feed_cache(request.user)
+        invalidate_user_feed_cache(followed_user)
+
+        # Log the following action
+        logger.info(f"{request.user.username} is now following {followed_user.username}.")
+
+        return Response({'message': f'You are now following {followed_user.username}.'}, status=status.HTTP_201_CREATED)
+
+class GoogleLoginView(APIView):
+    def get(self, request):
+        strategy = load_strategy(request)
+        backend = GoogleOAuth2(strategy=strategy)
+
+        try:
+            user = backend.do_auth(request.GET.get('code'))
+            if user:
+                login(request, user)
+                return Response({"message": "Login successful", "user": user.email})
+            else:
+                return Response({"error": "Authentication failed"}, status=400)
+        except AuthException:
+            return Response({"error": "Invalid token"}, status=400)

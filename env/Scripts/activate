@@ -38,7 +38,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="C:\Users\Ck\OneDrive\Desktop\Project Folders\connectly_project_group_1\env"
+VIRTUAL_ENV="C:\Projects\connectly_project_group_1\env"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"

@@ -10,6 +10,8 @@ from .views import (
     TestTokenView,
     DeleteUserView,
     UpdateUserView,
+    NewsFeedView,
+    FollowUserView,
     DeleteAllUsersView
 )
 
@@ -39,4 +41,8 @@ urlpatterns = [
     # Custom Comment Endpoints
     path('posts/<int:post_id>/comments/', CommentViewSet.as_view({'post': 'create'}), name='create-comment'),
     path('comments/<int:pk>/', CommentViewSet.as_view({'put': 'update', 'delete': 'destroy'}), name='update-delete-comment'),
+   
+    # Add the new endpoint for the news feed
+    path('feed/', NewsFeedView.as_view(), name='news-feed'),
+    path('follow/', FollowUserView.as_view(), name='follow_user'),
 ]
