@@ -1,12 +1,16 @@
 import logging
+import time
 from django.contrib.auth import logout
 from django.contrib.auth import login
+from django.contrib.auth import authenticate
+from django.db import transaction
 from django.shortcuts import redirect
 from social_django.utils import load_strategy
 from social_core.backends.google import GoogleOAuth2
 from social_core.exceptions import AuthException
 from django.shortcuts import get_object_or_404
 from django.core.cache import cache
+from rest_framework.throttling import UserRateThrottle
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -57,7 +61,7 @@ class UserListView(BaseAuthenticatedAPIView):
 
 # Post ViewSet
 class PostViewSet(viewsets.ModelViewSet):
-    queryset = Post.objects.select_related('author').all()
+    queryset = Post.objects.select_related('author').only('id', 'author_id', 'content', 'created_at')
     serializer_class = PostSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -65,14 +69,10 @@ class PostViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
 
-    def list(self, request, *args, **kwargs):
-        logger.info(f"User: {request.user}, Authenticated: {request.user.is_authenticated}")
-        return super().list(request, *args, **kwargs)
-
 
 # Comment ViewSet
 class CommentViewSet(viewsets.ModelViewSet):
-    queryset = Comment.objects.select_related('author', 'post').all()
+    queryset = Comment.objects.select_related('author', 'post').only('id', 'author_id', 'post_id', 'created_at')
     serializer_class = CommentSerializer
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -86,38 +86,45 @@ class CommentViewSet(viewsets.ModelViewSet):
 # Like/Unlike a Post (Refactored)
 class LikePostView(BaseAuthenticatedAPIView):
     def post(self, request, post_id):
-        post = get_object_or_404(Post, id=post_id) 
+        post = get_object_or_404(Post, id=post_id)
         like, created = Like.objects.get_or_create(post=post, user=request.user)
-        
-        if created:
-            return Response({'message': 'Post liked.'}, status=status.HTTP_201_CREATED)
-        else:
+
+        if not created:
+            # If like already exists, delete it (unlike the post)
             like.delete()
-            return Response({'message': 'Post unliked.'}, status=status.HTTP_204_NO_CONTENT)
+            return Response({"message": "Post unliked."}, status=status.HTTP_200_OK)
+
+        return Response({'message': 'Post liked.'}, status=status.HTTP_201_CREATED)
+
 
 
 # Login View using DRF authentication (Improved Security)
 class LoginView(APIView):
     permission_classes = []
+    throttle_classes = [UserRateThrottle]
 
     def post(self, request):
         username = request.data.get('username')
         password = request.data.get('password')
-        
-        logger.info(f"Login attempt - Username: {username}")  # Removed password from logs
-        user = User.objects.filter(username=username).first()
-        
-        if user and user.check_password(password):
-            refresh = RefreshToken.for_user(user)
-            logger.info(f"Login successful for {username}")
-            return Response({
-                'access': str(refresh.access_token),
-                'refresh': str(refresh),
-            })
-        logger.warning(f"Login failed for {username} - Invalid credentials")
-        return Response({"error": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST)
 
+        logger.info(f"Login attempt - Username: {username}")
 
+        user = authenticate(username=username, password=password)
+
+        if not user:
+            logger.warning(f"Login failed for {username} - Invalid credentials")
+            logger.error(f"Authentication failed for user {username}")
+            return Response({"error": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST)
+            
+           
+
+        refresh = RefreshToken.for_user(user)
+        logger.info(f"Login successful for {username}")
+        return Response({
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+        })
+    
 # Register User View
 class RegisterView(APIView):
     def post(self, request):
@@ -136,7 +143,7 @@ class TestTokenView(BaseAuthenticatedAPIView):
 
 # Delete All Users View (Enhanced Security)
 class DeleteAllUsersView(BaseAuthenticatedAPIView):
-    permission_classes = [IsAdminUser]  # Only admin users can delete users
+    permission_classes = [IsAuthenticated]  
 
     def delete(self, request, *args, **kwargs):
         try:
@@ -153,7 +160,7 @@ class DeleteAllUsersView(BaseAuthenticatedAPIView):
 
 # Delete Single User View (Improved with get_object_or_404)
 class DeleteUserView(BaseAuthenticatedAPIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsAuthenticated]
 
     def delete(self, request, pk, *args, **kwargs):
         user = get_object_or_404(User, id=pk)
@@ -166,17 +173,15 @@ class DeleteUserView(BaseAuthenticatedAPIView):
 
 # Update User View (Improved Error Handling)
 class UpdateUserView(BaseAuthenticatedAPIView):
-    def put(self, request, pk, *args, **kwargs):
-        try:
-            user = User.objects.get(id=pk)
-        except User.DoesNotExist:
-            return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-
+    def put(self, request, pk):
+        user = get_object_or_404(User, id=pk)
         serializer = UserUpdateSerializer(user, data=request.data, partial=True)
+
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 
 # Custom Pagination Class
 class PostPagination(PageNumberPagination):
@@ -188,86 +193,95 @@ class PostPagination(PageNumberPagination):
 class NewsFeedView(ListAPIView):
     serializer_class = PostSerializer
     permission_classes = [IsAuthenticated]
-    pagination_class = PostPagination  # Ensure PostPagination is defined
+    pagination_class = PostPagination
 
     def get_queryset(self):
         user = self.request.user
         cache_key = f'user_feed_{user.id}'
-        cached_posts = cache.get(cache_key)
-        
-        if not cached_posts:
-            # Get the list of users that the current user is following
+        posts = cache.get(cache_key)
+
+        if posts is None:
             followed_users = Follow.objects.filter(user=user).values_list('followed_user', flat=True)
-            logger.info(f"Followed users: {followed_users}")
+            posts = list(Post.objects.filter(author__in=followed_users)
+                        .select_related('author')
+                        .prefetch_related('comments')
+                        .order_by('-created_at'))
+            cache.set(cache_key, posts, timeout=900)  # Cache for 15 min
 
-            # Fetch posts where the author is one of the followed users
-            posts = Post.objects.filter(author__in=followed_users) \
-                .select_related('author') \
-                .prefetch_related('comments') \
-                .order_by('-created_at')
+        return posts  # Return cached queryset
 
-            # Cache the posts for 15 minutes
-            cache.set(cache_key, posts, timeout=900)  # Cache for 15 minutes
-            return posts
-        
-        return cached_posts
+
+CACHE_THROTTLE = {}
 
 def invalidate_user_feed_cache(user):
-    """Function to invalidate the user's feed cache when a follow/unfollow action occurs."""
+    """Function to invalidate the user's feed cache with a simple throttle."""
+    now = time.time()
+    user_cache_key = f"user_cache_throttle_{user.id}"
+
+    last_invalidated = CACHE_THROTTLE.get(user_cache_key, 0)
+    if now - last_invalidated < 30:  # Prevent invalidating more than once every 30 sec
+        return
+
     cache.delete(f'user_feed_{user.id}')
+    CACHE_THROTTLE[user_cache_key] = now
     logger.info(f"Cache invalidated for user {user.id}.")
+
 
 class FollowUserView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle]  # Limit login attempts
 
     def post(self, request):
-        # Get the user to follow and the current authenticated user
         followed_user_id = request.data.get('followed_user_id')
-        
-        # Ensure the user to follow exists
-        try:
-            followed_user = User.objects.get(id=followed_user_id)
-        except User.DoesNotExist:
-            return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Make sure a user can't follow themselves
+        followed_user = get_object_or_404(User, id=followed_user_id)
+
         if followed_user == request.user:
             return Response({'error': 'You cannot follow yourself.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check if the user is already following the followed_user
-        if Follow.objects.filter(user=request.user, followed_user=followed_user).exists():
-            return Response({'error': 'You are already following this user.'}, status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():  # Ensure atomicity
+            if Follow.objects.filter(user=request.user, followed_user=followed_user).exists():
+                return Response({'error': 'You are already following this user.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Create the follow relationship
-        Follow.objects.create(user=request.user, followed_user=followed_user)
-        
-        # Invalidate the cache for both users involved in the follow relationship
+            Follow.objects.create(user=request.user, followed_user=followed_user)
+
         invalidate_user_feed_cache(request.user)
         invalidate_user_feed_cache(followed_user)
 
-        # Log the following action
         logger.info(f"{request.user.username} is now following {followed_user.username}.")
 
         return Response({'message': f'You are now following {followed_user.username}.'}, status=status.HTTP_201_CREATED)
-
+    
 class GoogleLoginView(APIView):
     def get(self, request):
         strategy = load_strategy(request)
         backend = GoogleOAuth2(strategy=strategy)
+        code = request.GET.get('code')
+
+        if not code:
+            return Response({"error": "Authorization code missing"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            user = backend.do_auth(request.GET.get('code'))
-            if user:
+            user = backend.do_auth(code)
+            if user and user.is_active:
                 login(request, user)
-                return Response({"message": "Login successful", "user": user.email})
-            else:
-                return Response({"error": "Authentication failed"}, status=400)
-        except AuthException:
-            return Response({"error": "Invalid token"}, status=400)
+                refresh = RefreshToken.for_user(user)
+                return Response({
+                    "message": "Login successful",
+                    "access": str(refresh.access_token),
+                    "refresh": str(refresh),
+                    "user": user.email
+                })
+            return Response({"error": "Authentication failed"}, status=status.HTTP_400_BAD_REQUEST)
+        except AuthException as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class GoogleLogoutView(APIView):
     def get(self, request):
         logout(request)
         return Response({"message": "Logged out successfully"}) 
+
+
 
 

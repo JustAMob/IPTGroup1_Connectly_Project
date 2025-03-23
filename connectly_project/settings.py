@@ -151,6 +151,12 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',  # Default to authenticated users
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'user': '5/min',  
+    }
 }
 
 SECURE_SSL_REDIRECT = True
@@ -210,8 +216,10 @@ LOGGING = {
 
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = '540905805159-2qm29jt8ejgnomnha1518hqeoaq72el0.apps.googleusercontent.com'
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = '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'
+SOCIAL_AUTH_STATE_PARAMETER = True
+SOCIAL_AUTH_REDIRECT_IS_HTTPS = True
 
-SOCIAL_AUTH_GOOGLE_OAUTH2_REDIRECT_URI = 'https://127.0.0.1:8000/auth/completegin/google-oauth2/'  
+SOCIAL_AUTH_GOOGLE_OAUTH2_REDIRECT_URI = 'https://127.0.0.1:8000/auth/complete/google-oauth2/'  
 
 # Allow Django to store authentication tokens
 SOCIAL_AUTH_PIPELINE = (
