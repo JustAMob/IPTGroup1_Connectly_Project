@@ -5,9 +5,18 @@ from django.contrib.auth.models import AbstractUser, Group, Permission
 from django.dispatch import receiver
 from django.contrib.auth.hashers import make_password
 
-# Custom User Model
+
+# Enum for User Roles
+class Role(models.TextChoices):
+    ADMIN = 'admin', 'Admin'
+    USER = 'user', 'User'
+    GUEST = 'guest', 'Guest'
+
+
+# Custom User Model with Role
 class User(AbstractUser):
     password = models.CharField(max_length=255)
+    role = models.CharField(max_length=10, choices=Role.choices, default=Role.USER)  # Role field to specify user role
 
     groups = models.ManyToManyField(
         Group, 
@@ -28,17 +37,18 @@ class User(AbstractUser):
     def __str__(self):
         return self.username
 
-# Signal to automatically add a newly created user to a group
-def assign_user_to_group(sender, instance, created, **kwargs):
-    if created:
-        group_name = 'Admin' if instance.is_superuser else 'Regular User'
-        try:
-            group = Group.objects.get(name=group_name)
-            instance.groups.add(group)
-        except Group.DoesNotExist:
-            pass
 
-post_save.connect(assign_user_to_group, sender=User)  # Registering the signal
+# Signal to automatically assign roles based on superuser flag
+def assign_user_role(sender, instance, created, **kwargs):
+    if created:
+        if instance.is_superuser:
+            instance.role = Role.ADMIN
+        else:
+            instance.role = Role.USER
+        instance.save()
+
+post_save.connect(assign_user_role, sender=User)  # Registering the signal
+
 
 # Follow Model for User Relationships
 class Follow(models.Model):
@@ -50,14 +60,16 @@ class Follow(models.Model):
         unique_together = ('user', 'followed_user')
 
     def __str__(self):
-        return f"{self.user.username} follows {self.followed_user.username}"        
+        return f"{self.user.username} follows {self.followed_user.username}"
 
-# Post Model
+
+# Post Model with Privacy Settings
 class Post(models.Model):
     content = models.TextField()
     author = models.ForeignKey(User, related_name='posts', on_delete=models.CASCADE)
     created_at = models.DateTimeField(auto_now_add=True)
-    
+    privacy = models.CharField(max_length=10, choices=[('public', 'Public'), ('private', 'Private')], default='public')  # Privacy field
+
     class Meta:
         indexes = [
             models.Index(fields=['created_at']),
@@ -65,6 +77,7 @@ class Post(models.Model):
 
     def __str__(self):
         return f"Post by {self.author.username} at {self.created_at}"
+
 
 # Comment Model
 class Comment(models.Model):
@@ -75,6 +88,7 @@ class Comment(models.Model):
 
     def __str__(self):
         return f"Comment by {self.author.username} on Post {self.post.id}"
+
 
 # Like Model
 class Like(models.Model):
@@ -90,6 +104,7 @@ class Like(models.Model):
     def __str__(self):
         return f"{self.user.username} liked Post {self.post.id}"
 
+
 # Singleton Pattern for Password Management
 class Singleton(type):
     _instances = {}
@@ -99,13 +114,16 @@ class Singleton(type):
             cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
 
+
 class PasswordSingleton(metaclass=Singleton):
     def __init__(self, password):
         self.password = password
 
+
 class PasswordClass:
     def __init__(self, password):
         self.password = password
+
 
 class PasswordFactory:
     def __init__(self):

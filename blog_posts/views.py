@@ -1,44 +1,27 @@
 import logging
-import time
-from django.contrib.auth import logout
-from django.contrib.auth import login
-from django.contrib.auth import authenticate
+from django.contrib.auth import logout, login, authenticate
+from django.shortcuts import redirect, get_object_or_404
 from django.db import transaction
-from django.shortcuts import redirect
-from social_django.utils import load_strategy
-from social_core.backends.google import GoogleOAuth2
-from social_core.exceptions import AuthException
-from django.shortcuts import get_object_or_404
-from django.core.cache import cache
-from rest_framework.throttling import UserRateThrottle
 from rest_framework import status, viewsets
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.generics import ListAPIView
 from .models import User, Post, Comment, Like
 from .models import Follow
 from .serializers import (
     UserSerializer, 
-    UserRegisterSerializer, 
     PostSerializer, 
-    CommentSerializer,
+    CommentSerializer, 
     UserUpdateSerializer
 )
+from .permissions import IsAdminUser, IsOwnerOrAdmin
 
-logger = logging.getLogger(__name__)  # Properly initialized logger
+logger = logging.getLogger(__name__)
 
-
-# Base Class for Reusability
-class BaseAuthenticatedAPIView(APIView):
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
-
-
-# User ViewSet
+# User ViewSet with RBAC applied
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
@@ -51,31 +34,23 @@ class UserViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-# User List View (Refactored)
-class UserListView(BaseAuthenticatedAPIView):
-    def get(self, request):
-        users = User.objects.all()
-        serializer = UserSerializer(users, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-# Post ViewSet
+# Post ViewSet with RBAC applied
 class PostViewSet(viewsets.ModelViewSet):
     queryset = Post.objects.select_related('author').only('id', 'author_id', 'content', 'created_at')
     serializer_class = PostSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOwnerOrAdmin]  # Apply RBAC permission
 
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
 
 
-# Comment ViewSet
+# Comment ViewSet with RBAC applied
 class CommentViewSet(viewsets.ModelViewSet):
     queryset = Comment.objects.select_related('author', 'post').only('id', 'author_id', 'post_id', 'created_at')
     serializer_class = CommentSerializer
     authentication_classes = [JWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsOwnerOrAdmin]  # Apply RBAC permission
 
     def perform_create(self, serializer):
         post_id = self.kwargs.get('post_id')
@@ -83,8 +58,11 @@ class CommentViewSet(viewsets.ModelViewSet):
         serializer.save(author=self.request.user, post=post)
 
 
-# Like/Unlike a Post (Refactored)
-class LikePostView(BaseAuthenticatedAPIView):
+# Like/Unlike a Post with RBAC applied
+class LikePostView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]  # No special role needed here, just authentication
+
     def post(self, request, post_id):
         post = get_object_or_404(Post, id=post_id)
         like, created = Like.objects.get_or_create(post=post, user=request.user)
@@ -97,70 +75,10 @@ class LikePostView(BaseAuthenticatedAPIView):
         return Response({'message': 'Post liked.'}, status=status.HTTP_201_CREATED)
 
 
-
-# Login View using DRF authentication (Improved Security)
-class LoginView(APIView):
-    permission_classes = []
-    throttle_classes = [UserRateThrottle]
-
-    def post(self, request):
-        username = request.data.get('username')
-        password = request.data.get('password')
-
-        logger.info(f"Login attempt - Username: {username}")
-
-        user = authenticate(username=username, password=password)
-
-        if not user:
-            logger.warning(f"Login failed for {username} - Invalid credentials")
-            logger.error(f"Authentication failed for user {username}")
-            return Response({"error": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST)
-            
-           
-
-        refresh = RefreshToken.for_user(user)
-        logger.info(f"Login successful for {username}")
-        return Response({
-            'access': str(refresh.access_token),
-            'refresh': str(refresh),
-        })
-    
-# Register User View
-class RegisterView(APIView):
-    def post(self, request):
-        serializer = UserRegisterSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-# Test Token View
-class TestTokenView(BaseAuthenticatedAPIView):
-    def get(self, request):
-        return Response({"message": "Token is valid!"})
-
-
-# Delete All Users View (Enhanced Security)
-class DeleteAllUsersView(BaseAuthenticatedAPIView):
-    permission_classes = [IsAuthenticated]  
-
-    def delete(self, request, *args, **kwargs):
-        try:
-            logger.info("Delete all users request received")
-            users_to_delete = User.objects.exclude(is_superuser=True)
-            deleted_count, _ = users_to_delete.delete()  # Deletes the users
-
-            logger.info(f"{deleted_count} users deleted successfully.")
-            return Response({"message": f"{deleted_count} users deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
-        except Exception as e:
-            logger.error(f"Error occurred: {str(e)}")
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-
-# Delete Single User View (Improved with get_object_or_404)
-class DeleteUserView(BaseAuthenticatedAPIView):
-    permission_classes = [IsAuthenticated]
+# Delete User View (For admin only) with RBAC applied
+class DeleteUserView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsAdminUser]  # Only admin can delete a user
 
     def delete(self, request, pk, *args, **kwargs):
         user = get_object_or_404(User, id=pk)
@@ -171,8 +89,11 @@ class DeleteUserView(BaseAuthenticatedAPIView):
         return Response({"message": f"User {user.username} deleted successfully."}, status=status.HTTP_204_NO_CONTENT)
 
 
-# Update User View (Improved Error Handling)
-class UpdateUserView(BaseAuthenticatedAPIView):
+# Update User View (General user can update their own info; Admin can update any user)
+class UpdateUserView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated, IsOwnerOrAdmin]  # Owner or Admin can update the user
+
     def put(self, request, pk):
         user = get_object_or_404(User, id=pk)
         serializer = UserUpdateSerializer(user, data=request.data, partial=True)
@@ -189,47 +110,28 @@ class PostPagination(PageNumberPagination):
     page_size_query_param = 'page_size'
     max_page_size = 100
 
-# News Feed View
-class NewsFeedView(ListAPIView):
-    serializer_class = PostSerializer
+
+# News Feed View with RBAC applied
+class NewsFeedView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     pagination_class = PostPagination
 
-    def get_queryset(self):
-        user = self.request.user
-        cache_key = f'user_feed_{user.id}'
-        posts = cache.get(cache_key)
+    def get(self, request):
+        user = request.user
+        posts = Post.objects.filter(author__in=user.following.all()).order_by('-created_at')
+        page = self.paginate_queryset(posts)
+        if page is not None:
+            serializer = PostSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
 
-        if posts is None:
-            followed_users = Follow.objects.filter(user=user).values_list('followed_user', flat=True)
-            posts = list(Post.objects.filter(author__in=followed_users)
-                        .select_related('author')
-                        .prefetch_related('comments')
-                        .order_by('-created_at'))
-            cache.set(cache_key, posts, timeout=900)  # Cache for 15 min
-
-        return posts  # Return cached queryset
+        serializer = PostSerializer(posts, many=True)
+        return Response(serializer.data)
 
 
-CACHE_THROTTLE = {}
-
-def invalidate_user_feed_cache(user):
-    """Function to invalidate the user's feed cache with a simple throttle."""
-    now = time.time()
-    user_cache_key = f"user_cache_throttle_{user.id}"
-
-    last_invalidated = CACHE_THROTTLE.get(user_cache_key, 0)
-    if now - last_invalidated < 30:  # Prevent invalidating more than once every 30 sec
-        return
-
-    cache.delete(f'user_feed_{user.id}')
-    CACHE_THROTTLE[user_cache_key] = now
-    logger.info(f"Cache invalidated for user {user.id}.")
-
-
+# Follow User View (RBAC for user following functionality)
 class FollowUserView(APIView):
-    permission_classes = [IsAuthenticated]
-    throttle_classes = [UserRateThrottle]  # Limit login attempts
+    permission_classes = [IsAuthenticated]  # Only authenticated users can follow others
 
     def post(self, request):
         followed_user_id = request.data.get('followed_user_id')
@@ -245,43 +147,5 @@ class FollowUserView(APIView):
 
             Follow.objects.create(user=request.user, followed_user=followed_user)
 
-        invalidate_user_feed_cache(request.user)
-        invalidate_user_feed_cache(followed_user)
-
         logger.info(f"{request.user.username} is now following {followed_user.username}.")
-
         return Response({'message': f'You are now following {followed_user.username}.'}, status=status.HTTP_201_CREATED)
-    
-class GoogleLoginView(APIView):
-    def get(self, request):
-        strategy = load_strategy(request)
-        backend = GoogleOAuth2(strategy=strategy)
-        code = request.GET.get('code')
-
-        if not code:
-            return Response({"error": "Authorization code missing"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            user = backend.do_auth(code)
-            if user and user.is_active:
-                login(request, user)
-                refresh = RefreshToken.for_user(user)
-                return Response({
-                    "message": "Login successful",
-                    "access": str(refresh.access_token),
-                    "refresh": str(refresh),
-                    "user": user.email
-                })
-            return Response({"error": "Authentication failed"}, status=status.HTTP_400_BAD_REQUEST)
-        except AuthException as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-
-class GoogleLogoutView(APIView):
-    def get(self, request):
-        logout(request)
-        return Response({"message": "Logged out successfully"}) 
-
-
-
-

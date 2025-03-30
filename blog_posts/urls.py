@@ -5,15 +5,12 @@ from .views import (
     PostViewSet,
     CommentViewSet,
     LikePostView,
-    LoginView,
     RegisterView,
     TestTokenView,
     DeleteUserView,
     UpdateUserView,
     NewsFeedView,
     FollowUserView,
-    GoogleLoginView, 
-    GoogleLogoutView,
     DeleteAllUsersView
 )
 
@@ -47,8 +44,4 @@ urlpatterns = [
     # News Feed & Following
     path('feed/', NewsFeedView.as_view(), name='news-feed'),
     path('follow/', FollowUserView.as_view(), name='follow_user'),
-
-    # Google OAuth Login & Logout
-    path('auth/login/google/', GoogleLoginView.as_view(), name="google_login"),
-    path('auth/logout/', GoogleLogoutView.as_view(), name="logout"),
 ]
