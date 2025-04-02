@@ -15,7 +15,6 @@ class Role(models.TextChoices):
 
 # Custom User Model with Role
 class User(AbstractUser):
-    password = models.CharField(max_length=255)
     role = models.CharField(max_length=10, choices=Role.choices, default=Role.USER)  # Role field to specify user role
 
     groups = models.ManyToManyField(
@@ -30,7 +29,7 @@ class User(AbstractUser):
     )
 
     def save(self, *args, **kwargs):
-        if self.pk is None or not User.objects.get(pk=self.pk).password == self.password:
+        if self.password and not self.password.startswith(('pbkdf2_sha256$', 'argon2')):
             self.set_password(self.password)  # Preferred Django way
         super().save(*args, **kwargs)
 

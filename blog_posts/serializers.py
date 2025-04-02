@@ -60,10 +60,11 @@ class CommentSerializer(serializers.ModelSerializer):
 class PostSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     comments = CommentSerializer(many=True, read_only=True)
+    privacy = serializers.ChoiceField(choices=[('public', 'Public'), ('private', 'Private')], required=False)
 
     class Meta:
         model = Post
-        fields = ['id', 'content', 'author', 'created_at', 'comments']
+        fields = ['id', 'content', 'author', 'created_at', 'privacy', 'comments']
         read_only_fields = ['id', 'author', 'created_at']
 
 class LikeSerializer(serializers.ModelSerializer):

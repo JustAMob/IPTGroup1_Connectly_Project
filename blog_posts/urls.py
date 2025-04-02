@@ -1,5 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
+from .views import LoginView, RegisterView, DeleteUserView  
+from .views import TestTokenView
 from .views import (
     UserViewSet,
     PostViewSet,
