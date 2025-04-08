@@ -224,6 +224,23 @@ LOGGING = {
         },
     },
 }
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/1',  # /1 uses database 1
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'SOCKET_CONNECT_TIMEOUT': 5,  # seconds
+            'SOCKET_TIMEOUT': 5,         # seconds
+            'IGNORE_EXCEPTIONS': True,   # Prevents crashes if Redis is unavailable
+            'PICKLE_VERSION': -1,       # Uses highest protocol
+            'CONNECTION_POOL_KWARGS': {
+                'max_connections': 100,
+            }
+        },
+        'KEY_PREFIX': 'blogposts_',
+    }
+}
 
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = '540905805159-2qm29jt8ejgnomnha1518hqeoaq72el0.apps.googleusercontent.com'
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = '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'
